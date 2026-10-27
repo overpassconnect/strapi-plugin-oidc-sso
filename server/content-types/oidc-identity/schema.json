@@ -1,0 +1,46 @@
+{
+  "kind": "collectionType",
+  "collectionName": "oidc_identities",
+  "info": {
+    "singularName": "oidc-identity",
+    "pluralName": "oidc-identities",
+    "displayName": "OIDC Identity",
+    "description": "Maps a stable OIDC subject (sub) to a Strapi admin user id."
+  },
+  "options": {
+    "draftAndPublish": false
+  },
+  "pluginOptions": {
+    "content-manager": { "visible": false },
+    "content-type-builder": { "visible": false }
+  },
+  "attributes": {
+    "subject": {
+      "type": "string",
+      "required": true,
+      "unique": true,
+      "configurable": false
+    },
+    "issuer": {
+      "type": "string",
+      "configurable": false
+    },
+    "email": {
+      "type": "string",
+      "configurable": false
+    },
+    "sid": {
+      "type": "string",
+      "configurable": false
+    },
+    "adminUserId": {
+      "type": "integer",
+      "required": true,
+      "configurable": false
+    },
+    "lastLoginAt": {
+      "type": "datetime",
+      "configurable": false
+    }
+  }
+}

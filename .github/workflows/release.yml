@@ -1,0 +1,51 @@
+name: Release to npm
+
+# Publishes the package to npm when a v* tag arrives. The source of truth is
+# Gitea: tag the release there (e.g. v1.0.1, matching package.json) and its
+# push mirror carries the tag to GitHub, where this runs. A manual dispatch
+# publishes only when started on a tag, so every npm release is a Gitea tag.
+# Uses npm "trusted publishing": GitHub's OIDC token proves the build came
+# from this repo and workflow, so NO npm token secret is needed, and npm
+# attaches a provenance attestation to the package.
+#
+# One-time setup on npmjs.com (after the FIRST manual publish):
+#   package page -> Settings -> Trusted Publisher -> GitHub Actions
+#   organization/user: overpassconnect
+#   repository:        strapi-plugin-oidc-sso
+#   workflow filename: release.yml
+#
+# Until that is configured, this workflow simply fails at the publish step
+# with an auth error; nothing is published accidentally.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  publish:
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write # required for npm trusted publishing / provenance
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          registry-url: https://registry.npmjs.org
+      # Trusted publishing needs a recent npm on the runner.
+      - run: npm install -g npm@latest
+      - run: npm ci
+      - run: npm test
+      - name: Check the tag matches package.json version
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          TAG="$GITHUB_REF_NAME"
+          if [ "v$PKG_VERSION" != "$TAG" ]; then
+            echo "package.json is $PKG_VERSION but the tag is $TAG" >&2
+            exit 1
+          fi
+      - run: npm publish --provenance

@@ -1,0 +1,73 @@
+{
+  "name": "@overpassconnect/strapi-plugin-oidc-sso",
+  "version": "1.0.0",
+  "description": "Generic OIDC SSO (Authorization Code + PKCE) for the Strapi v5 admin panel - Keycloak, Auth0, Okta, Azure AD, Authentik, or any conformant provider. Works on the free Community Edition. Establishes a real admin session via Strapi's SessionManager and keeps local login as a break-glass fallback.",
+  "license": "MIT",
+  "keywords": [
+    "strapi",
+    "plugin",
+    "oidc",
+    "sso",
+    "keycloak",
+    "auth0",
+    "okta",
+    "oauth2",
+    "admin",
+    "pkce"
+  ],
+  "type": "commonjs",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/overpassconnect/strapi-plugin-oidc-sso.git"
+  },
+  "bugs": {
+    "url": "https://github.com/overpassconnect/strapi-plugin-oidc-sso/issues"
+  },
+  "homepage": "https://github.com/overpassconnect/strapi-plugin-oidc-sso#readme",
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "test": "node tests/unit-logic.js && node tests/unit-crypto.js",
+    "test:e2e": "node tests/e2e/flow.js",
+    "test:e2e:setup-realm": "node tests/e2e/kc-realm-setup.js"
+  },
+  "exports": {
+    "./package.json": "./package.json",
+    "./strapi-admin": {
+      "source": "./admin/src/index.js",
+      "import": "./admin/src/index.js",
+      "require": "./admin/src/index.js",
+      "default": "./admin/src/index.js"
+    },
+    "./strapi-server": {
+      "require": "./strapi-server.js",
+      "default": "./strapi-server.js"
+    }
+  },
+  "files": [
+    "strapi-server.js",
+    "strapi-admin.js",
+    "server",
+    "admin",
+    "config/plugins.example.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "jose": "^5.9.6"
+  },
+  "peerDependencies": {
+    "@strapi/strapi": "^5.24.0"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "npm": ">=6.0.0"
+  },
+  "strapi": {
+    "kind": "plugin",
+    "name": "oidc-sso",
+    "displayName": "OIDC SSO (Admin)",
+    "description": "OpenID Connect single sign-on for the Strapi admin panel using the Authorization Code + PKCE flow."
+  }
+}

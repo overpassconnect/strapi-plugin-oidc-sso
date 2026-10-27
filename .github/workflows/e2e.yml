@@ -1,0 +1,151 @@
+name: e2e
+
+# Full end-to-end suite (tests/e2e/flow.js) against a scaffolded Strapi app and a
+# real Keycloak, in develop mode and in production mode behind a TLS front.
+# Called by ci.yml (Strapi 5) and canary.yml (latest Strapi).
+
+on:
+  workflow_call:
+    inputs:
+      strapi-version:
+        description: create-strapi-app version or dist-tag to scaffold
+        type: string
+        default: '5'
+
+jobs:
+  keycloak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [develop, production]
+    env:
+      E2E_OUTBOUND_LOG: ${{ github.workspace }}/e2e-run/outbound.log
+      E2E_FAULT_FILE: ${{ github.workspace }}/e2e-run/fault.json
+      E2E_SQLITE: ${{ github.workspace }}/e2e-app/.tmp/data.db
+      E2E_APP_DIR: ${{ github.workspace }}/e2e-app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: npm
+
+      # Host networking, so Keycloak's back-channel logout calls to 127.0.0.1
+      # reach Strapi and the suite's capture server on the runner.
+      - name: Start Keycloak 26.8.1
+        run: |
+          docker run -d --name kc --network host \
+            -e KC_BOOTSTRAP_ADMIN_USERNAME=admin -e KC_BOOTSTRAP_ADMIN_PASSWORD=admin \
+            quay.io/keycloak/keycloak:26.8.1 start-dev --http-port 8080
+
+      - name: Install the plugin's dependencies and pack it as npm would publish it
+        run: |
+          npm ci
+          mkdir -p e2e-run
+          npm pack --pack-destination e2e-run
+
+      - name: Scaffold a Strapi app
+        run: |
+          npx create-strapi-app@${{ inputs.strapi-version }} e2e-app \
+            --non-interactive --no-run --skip-cloud --dbclient=sqlite \
+            --use-npm --js --no-example --no-git-init --install
+          # The scaffold ships DATABASE_FILENAME= (empty), which breaks sqlite.
+          sed -i 's|^DATABASE_FILENAME=.*|DATABASE_FILENAME=.tmp/data.db|' e2e-app/.env
+          echo "STRAPI_TELEMETRY_DISABLED=true" >> e2e-app/.env
+          node -e "console.log('strapi', require('./e2e-app/node_modules/@strapi/strapi/package.json').version)"
+
+      - name: Install the plugin from the tarball (a real copy, like an npm user gets)
+        run: npm --prefix e2e-app install "$(ls "$GITHUB_WORKSPACE"/e2e-run/*.tgz)"
+
+      - name: Configure the app (${{ matrix.mode }})
+        run: |
+          if [ "${{ matrix.mode }}" = production ]; then
+            PUBLIC=https://127.0.0.1:8443; PROXY=true
+          else
+            PUBLIC=http://127.0.0.1:1337; PROXY=false
+          fi
+          cat > e2e-app/config/plugins.js <<'EOF'
+          module.exports = ({ env }) => ({
+            'oidc-sso': {
+              enabled: true,
+              config: {
+                issuer: 'http://127.0.0.1:8080/realms/strapi-demo',
+                clientId: 'strapi-admin',
+                clientSecret: 'kc-local-demo-secret-51c9e2b7a4',
+                strapiPublicUrl: env('STRAPI_PUBLIC_URL'),
+                roleSources: ['realm', 'groups'],
+                roleMapping: {
+                  'cms-editor': 'strapi-editor',
+                  'cms-authors': 'strapi-author',
+                },
+                provisioning: { autoCreate: true },
+              },
+            },
+          });
+          EOF
+          cat > e2e-app/config/server.js <<'EOF'
+          module.exports = ({ env }) => ({
+            host: env('HOST', '0.0.0.0'),
+            port: env.int('PORT', 1337),
+            proxy: { koa: env.bool('SERVER_PROXY_KOA', false) },
+            app: { keys: env.array('APP_KEYS') },
+          });
+          EOF
+          printf 'STRAPI_PUBLIC_URL=%s\nSERVER_PROXY_KOA=%s\n' "$PUBLIC" "$PROXY" >> e2e-app/.env
+
+      - name: Wait for Keycloak and provision the test realm
+        run: |
+          for i in $(seq 1 90); do
+            curl -sf http://127.0.0.1:8080/realms/master/.well-known/openid-configuration -o /dev/null && break
+            sleep 2
+          done
+          if [ "${{ matrix.mode }}" = production ]; then
+            STRAPI_URL=https://127.0.0.1:8443 \
+              E2E_BACKCHANNEL_URL=http://127.0.0.1:1337/oidc-sso/backchannel-logout \
+              node tests/e2e/kc-realm-setup.js
+          else
+            STRAPI_URL=http://127.0.0.1:1337 node tests/e2e/kc-realm-setup.js
+          fi
+
+      - name: Create the local super admin (break-glass)
+        working-directory: e2e-app
+        run: npx strapi admin:create-user --email=e2e-admin@example.com --password=E2e-Admin-Passw0rd --firstname=E2E --lastname=Admin
+
+      - name: Build the admin and start the TLS front
+        if: matrix.mode == 'production'
+        run: |
+          (cd e2e-app && NODE_ENV=production npm run build)
+          openssl req -x509 -newkey rsa:2048 -nodes -keyout e2e-run/key.pem -out e2e-run/cert.pem -days 1 \
+            -subj "/CN=127.0.0.1" -addext "subjectAltName=IP:127.0.0.1"
+          E2E_TLS_CERT=e2e-run/cert.pem E2E_TLS_KEY=e2e-run/key.pem E2E_TLS_PORT=8443 \
+            E2E_UPSTREAM=http://127.0.0.1:1337 nohup node tests/e2e/tls-front.js > e2e-run/tls-front.log 2>&1 &
+
+      - name: Start Strapi (${{ matrix.mode }}) with the outbound tap preloaded
+        run: |
+          CMD=develop
+          if [ "${{ matrix.mode }}" = production ]; then CMD=start; export NODE_ENV=production; fi
+          export NODE_OPTIONS="--require $GITHUB_WORKSPACE/tests/e2e/outbound-tap.js"
+          (cd e2e-app && nohup node node_modules/@strapi/strapi/bin/strapi.js "$CMD" > ../e2e-run/strapi.log 2>&1 &)
+          for i in $(seq 1 150); do
+            curl -sf http://127.0.0.1:1337/oidc-sso/status -o /dev/null && break
+            sleep 2
+          done
+          curl -sf http://127.0.0.1:1337/oidc-sso/status
+
+      - name: Run the e2e suite (${{ matrix.mode }})
+        run: |
+          if [ "${{ matrix.mode }}" = production ]; then
+            export STRAPI_URL=https://127.0.0.1:8443 E2E_CA_FILE=e2e-run/cert.pem E2E_DIRECT_URL=http://127.0.0.1:1337
+          else
+            export STRAPI_URL=http://127.0.0.1:1337
+          fi
+          node tests/e2e/flow.js
+
+      - name: Logs on failure
+        if: failure()
+        run: |
+          tail -150 e2e-run/strapi.log || true
+          tail -50 e2e-run/tls-front.log || true
+          docker logs --tail 80 kc || true

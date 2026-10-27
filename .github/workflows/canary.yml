@@ -1,0 +1,17 @@
+name: Canary (latest Strapi)
+
+# The login completion touches Strapi admin internals that semver does not
+# cover (localStorage token bootstrap). This scheduled run repeats the full
+# e2e suite against the LATEST Strapi release so upstream changes surface here
+# before they surface in user issue reports.
+
+on:
+  schedule:
+    - cron: '0 6 * * 1,4' # Mondays and Thursdays, 06:00 UTC
+  workflow_dispatch:
+
+jobs:
+  e2e-latest-strapi:
+    uses: ./.github/workflows/e2e.yml
+    with:
+      strapi-version: latest
